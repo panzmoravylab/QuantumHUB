@@ -1,0 +1,17 @@
+.env
+MT5_testacc
+__pycache__/
+*.py[cod]
+*.log
+logs/*.csv
+.venv/
+.venv_py311/
+.venv_quarantine/
+.venv_old/
+venv/
+.idea/
+.vscode/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
