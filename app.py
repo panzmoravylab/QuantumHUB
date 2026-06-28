@@ -14,7 +14,8 @@ from zoneinfo import ZoneInfo
 from dash import ALL, Dash, Input, Output, State, callback, clientside_callback, ClientsideFunction, ctx, html, no_update
 
 from alerts import alert_on_new_critical
-from config import HUD_MODE, RISK, SAFETY, UI, HUD_VERSION
+from config import HUD_MODE, HUD_UI_LANG, RISK, SAFETY, UI, HUD_VERSION
+from i18n import t as i18n_t
 from journal_stats import compute_session_stats
 from toast_manager import active_toasts, build_toast_candidates, merge_extra_toasts, sync_toast_queue
 from position_manager import close_toast_candidates, evaluate_positions
@@ -381,10 +382,12 @@ def dismiss_toast(_clicks, dismissed, ids):
     State("toast-dismissed", "data"),
     State("position-alert-state", "data"),
     State("notification-log-store", "data"),
+    State("language-store", "data"),
 )
 def refresh_dashboard(
     _n, active_tf, kill_status, macro_expanded, chart_visible, hud_tier,
     toast_queue, toast_dismissed, position_alert_state, notification_log,
+    lang,
 ):
     try:
         return _refresh_dashboard_impl(
@@ -392,6 +395,7 @@ def refresh_dashboard(
             toast_queue, toast_dismissed, position_alert_state,
             macro_expanded=macro_expanded,
             notification_log=notification_log,
+            lang=lang,
         )
     except Exception as exc:
         logger.exception("Dashboard refresh failed")
@@ -457,6 +461,7 @@ def _refresh_dashboard_impl(
     position_alert_state=None,
     macro_expanded=False,
     notification_log=None,
+    lang="CZ",
 ):
     tz = ZoneInfo(RISK.timezone)
     now = datetime.now(tz)
@@ -507,6 +512,13 @@ def _refresh_dashboard_impl(
     verdict = evaluate_verdict(account, market, events, now)
     lot_result = _get_lot_result(market, account)
     style_guide = evaluate_trading_style(market, indicators, verdict, today_macro, account)
+    trend_brief = build_trend_brief(
+        market, indicators, style_guide, state.read_strength_history(), now
+    )
+    state.record_trend_strength(trend_brief.strength_now)
+    trend_brief = build_trend_brief(
+        market, indicators, style_guide, state.read_strength_history(), now
+    )
     checklist = build_pre_news_checklist(
         account, market, positions, verdict, lot_result, events, macro_summary, now
     )
@@ -521,16 +533,11 @@ def _refresh_dashboard_impl(
         signal_lab,
         connected,
         now,
+        indicators=indicators,
+        trend_brief=trend_brief,
+        price_velocity=data.get("price_velocity", 0.0),
     )
     _log_calc_snapshot(scalp_plan, verdict, style_guide, account, market, connected)
-
-    trend_brief = build_trend_brief(
-        market, indicators, style_guide, state.read_strength_history(), now
-    )
-    state.record_trend_strength(trend_brief.strength_now)
-    trend_brief = build_trend_brief(
-        market, indicators, style_guide, state.read_strength_history(), now
-    )
 
     cmd_lines = state.compute_log.read()
     engine_panel = build_engine_panel(
@@ -558,6 +565,7 @@ def _refresh_dashboard_impl(
         verdict,
         macro_summary,
         now,
+        trend_brief,
     )
 
     toast_candidates = build_toast_candidates(
@@ -583,20 +591,20 @@ def _refresh_dashboard_impl(
 
     base_tuple = (
         macro_badge,
-        render_macro_summary(macro_summary, market, macro_source, macro_error),
-        render_pre_news_checklist(checklist),
+        render_macro_summary(macro_summary, events, now, market, macro_source, macro_error, lang=lang),
+        render_pre_news_checklist(checklist, lang=lang),
         render_macro_events(enriched, macro_summary, expanded=macro_expanded),
-        render_mtf_strip(indicators),
-        render_trend_brief_panel(trend_brief),
-        render_trend_brief_panel(trend_brief),  # qp-trend-brief-kompakt
+        render_mtf_strip(indicators, lang=lang),
+        render_trend_brief_panel(trend_brief, lang=lang),
+        render_trend_brief_panel(trend_brief, lang=lang),  # qp-trend-brief-kompakt
         toast_content,
         toast_style,
         new_queue,
         panel_a_class(critical),
         render_equity(account),
         render_account_mini_stats(session_stats),
-        render_positions_summary(position_verdicts),
-        render_position_list(position_verdicts),
+        render_positions_summary(position_verdicts, lang=lang),
+        render_position_list(position_verdicts, lang=lang),
         new_alert_state,
         render_trade_journal(),
         ks_msg,
@@ -605,21 +613,23 @@ def _refresh_dashboard_impl(
         tf_btn_class(tf, "M1"),
         tf_btn_class(tf, "M5"),
         tf_btn_class(tf, "M15"),
-        render_trade_decision_hero(market, scalp_plan, verdict, trend_brief, indicators),
-        render_style_strip(style_guide),
-        render_signal_lab_compact(signal_lab, market, indicators),
-        render_metrics(market, indicators, lot_result),
-        render_engine_panel(engine_panel),
+        render_trade_decision_hero(
+            market, scalp_plan, verdict, trend_brief, indicators, lang=lang, signal_lab=signal_lab
+        ),
+        render_style_strip(style_guide, lang=lang),
+        render_signal_lab_compact(signal_lab, market, indicators, plan=scalp_plan, lang=lang),
+        render_metrics(market, indicators, lot_result, lang=lang),
+        render_engine_panel(engine_panel, lang=lang),
         render_cmd_terminal(cmd_lines, running=connected, market=market, signal_lab=signal_lab),
-        render_recommendation(scalp_plan, verdict, indicators),
+        render_recommendation(scalp_plan, verdict, indicators, lang=lang),
         render_cmd_terminal(cmd_lines, running=connected, market=market, signal_lab=signal_lab),
         render_timeline(sessions), # qc-timeline
         render_timeline(sessions), # qc-timeline-compact
-        render_next_event_compact(enriched, scalp_plan),
-        render_risk_reminder(account, scalp_plan, verdict),
+        render_next_event_compact(enriched, scalp_plan, lang=lang),
+        render_risk_reminder(account, scalp_plan, verdict, lang=lang),
         render_header_account_chip(account),
         render_header_status_pills(
-            account, market, macro_summary, verdict, scalp_plan, connected
+            account, market, macro_summary, verdict, scalp_plan, connected, lang=lang
         ),
         clock,
         live_text,
@@ -640,7 +650,10 @@ def _refresh_dashboard_impl(
         if v.action == "ZAVŘÍT":
             ticket = v.ticket
             reason_str = v.headline
-            label = f"ZAVŘÍT POZICI: Lístek #{ticket} ({v.side} {v.volume} lotů) - {reason_str}"
+            if lang == "EN":
+                label = f"CLOSE POSITION: Ticket #{ticket} ({v.side} {v.volume} lots) - {reason_str}"
+            else:
+                label = f"ZAVŘÍT POZICI: Lístek #{ticket} ({v.side} {v.volume} lotů) - {reason_str}"
             key = f"close_{ticket}"
             if key not in logged_keys:
                 ts_str = now.strftime("%H:%M:%S")
@@ -656,8 +669,11 @@ def _refresh_dashboard_impl(
                 
     # 2. Check for trade opportunity signal (gate_action == "ANO")
     if scalp_plan and scalp_plan.gate_action == "ANO":
-        label = f"PŘÍLEŽITOST K VSTUPU: {scalp_plan.direction} na Zlato - {scalp_plan.scalp_hint}"
-        key = "opp_" + now.strftime("%Y-%m-%d_%H:%M")
+        if lang == "EN":
+            label = f"TRADE OPPORTUNITY: {scalp_plan.direction} on Gold - {scalp_plan.scalp_hint}"
+        else:
+            label = f"PŘÍLEŽITOST K VSTUPU: {scalp_plan.direction} na Zlato - {scalp_plan.scalp_hint}"
+        key = f"opp_{scalp_plan.direction}_{now.strftime('%Y-%m-%d_%H')}_{now.minute // 15}"
         if key not in logged_keys:
             ts_str = now.strftime("%H:%M:%S")
             updated_log.append({
@@ -673,8 +689,11 @@ def _refresh_dashboard_impl(
     # 3. Check for upcoming macro news (< 30 minutes)
     if scalp_plan and scalp_plan.next_news_minutes is not None:
         if scalp_plan.next_news_minutes <= 30 and scalp_plan.next_news_minutes > 0:
-            label = f"POZOR MAKRO: Za {scalp_plan.next_news_minutes} min začíná {scalp_plan.next_news_label}!"
-            key = f"news_{scalp_plan.next_news_label}_{now.hour}_{now.minute // 5}"
+            if lang == "EN":
+                label = f"CAUTION MACRO: In {scalp_plan.next_news_minutes} min starts {scalp_plan.next_news_label}!"
+            else:
+                label = f"POZOR MAKRO: Za {scalp_plan.next_news_minutes} min začíná {scalp_plan.next_news_label}!"
+            key = f"news_{scalp_plan.next_news_label}_{now.strftime('%Y-%m-%d')}"
             if key not in logged_keys:
                 ts_str = now.strftime("%H:%M:%S")
                 updated_log.append({
@@ -687,7 +706,7 @@ def _refresh_dashboard_impl(
                 from alerts import send_discord_webhook
                 send_discord_webhook(f"⚠️ MAKRO NEWS VÝSTRAHA: {label}")
 
-    notifications_html = render_kompakt_notifications(updated_log)
+    notifications_html = render_kompakt_notifications(updated_log, lang=lang)
 
     return base_tuple + (
         dxy_analysis_html,
@@ -702,12 +721,64 @@ def _refresh_dashboard_impl(
     Output("macro-expand-btn", "children"),
     Input("macro-expand-btn", "n_clicks"),
     State("macro-expand-store", "data"),
+    State("language-store", "data"),
     prevent_initial_call=True,
 )
-def toggle_macro_expansion(n_clicks, expanded):
+def toggle_macro_expansion(n_clicks, expanded, lang):
     expanded = not expanded
-    label = "Sbalit na dnes" if expanded else "Rozbalit +7 dní"
+    if lang == "EN":
+        label = "Collapse to today" if expanded else "Expand +7 days"
+    else:
+        label = "Sbalit na dnes" if expanded else "Rozbalit +7 dní"
     return expanded, label
+
+
+@callback(
+    Output("chart-visible", "data"),
+    Output("chart-toggle-btn", "children"),
+    Input("chart-toggle-btn", "n_clicks"),
+    State("chart-visible", "data"),
+    State("language-store", "data"),
+    prevent_initial_call=True,
+)
+def toggle_chart(n_clicks, visible, lang):
+    visible = not visible
+    if lang == "EN":
+        label = "Hide chart" if visible else "Show chart"
+    else:
+        label = "Skrýt graf" if visible else "Zobrazit graf"
+    return visible, label
+
+
+@callback(
+    Output("language-store", "data"),
+    Output("lang-toggle-btn", "children"),
+    Output("lang-toggle-btn", "className"),
+    Input("lang-toggle-btn", "n_clicks"),
+    State("language-store", "data")
+)
+def toggle_language(n_clicks, current_lang):
+    if not n_clicks:
+        btn = HUD_UI_LANG
+        cls = "lang-btn active-en" if btn == "EN" else "lang-btn active-cz"
+        return btn, btn, cls
+    if current_lang == "CZ":
+        return "EN", "EN", "lang-btn active-en"
+    return "CZ", "CZ", "lang-btn active-cz"
+
+
+@callback(
+    Output("chart-toggle-btn", "children", allow_duplicate=True),
+    Output("macro-expand-btn", "children", allow_duplicate=True),
+    Input("language-store", "data"),
+    State("chart-visible", "data"),
+    State("macro-expand-store", "data"),
+    prevent_initial_call=True,
+)
+def translate_static_buttons(lang, chart_visible, macro_expanded):
+    chart_lbl = i18n_t("hide_chart" if chart_visible else "show_chart", lang)
+    macro_lbl = i18n_t("collapse_macro" if macro_expanded else "expand_macro", lang)
+    return chart_lbl, macro_lbl
 
 
 @callback(

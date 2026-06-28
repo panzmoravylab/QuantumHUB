@@ -150,3 +150,63 @@ def test_summarize_verdicts():
     verdicts = evaluate_positions([pos], {}, _market(), _indicators(), None, None, None, None)
     summary = summarize_position_verdicts(verdicts)
     assert "DRŽET" in summary or "KOREKCE" in summary
+
+
+def test_buy_aligned_high_trend_pct():
+    from dataclasses import replace
+
+    from trend_brief import TrendBrief
+    from signal_lab import SignalItem, SignalLabSnapshot
+    from trading_style import M1Metrics, StyleGuide, TradingStyle
+
+    brief = TrendBrief(
+        daily_dominant="BUY",
+        daily_buy_pct=60.0,
+        daily_sell_pct=40.0,
+        daily_source_tf="M1",
+        daily_bar_count=10,
+        now_direction="BUY",
+        strength_now=9,
+        strength_prev=7,
+        strength_delta=2,
+        strength_source_tf="M1",
+        strength_history=(7, 8, 9),
+        mtf={},
+    )
+    lab = SignalLabSnapshot(
+        headline="Momentum",
+        regime="TREND",
+        signals=[
+            SignalItem("M5 momentum", "BULL", "", "bull"),
+            SignalItem("Efficiency (20)", "0.62", "", "bull"),
+        ],
+    )
+    style = StyleGuide(
+        style=TradingStyle.MOMENTUM_TREND,
+        headline="Trend",
+        primary_action="Long pullbacks",
+        bullets=[],
+        metrics=M1Metrics(1.2, 5.0, 4, "BULL", 0.5, 0.3, "NORMAL"),
+    )
+    market = replace(_market(atr=4.0), current_candle_range=3.8, atr_impulse=True)
+    pos = _pos()
+    verdicts = evaluate_positions(
+        [pos], {}, market, _indicators(), lab, style, None, None, trend_brief=brief
+    )
+    assert verdicts[0].trend_alignment_pct >= 85
+    assert verdicts[0].trend_alignment_label == "ULTRA SILNÝ TREND"
+
+
+def test_buy_mtf_against_low_trend_pct():
+    pos = _pos()
+    verdicts = evaluate_positions(
+        [pos],
+        {},
+        _market(),
+        _indicators(m5=TrendBias.BEAR, m15=TrendBias.BEAR),
+        None,
+        None,
+        None,
+        None,
+    )
+    assert verdicts[0].trend_alignment_pct <= 35

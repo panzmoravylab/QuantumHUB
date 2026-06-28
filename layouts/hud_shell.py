@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from dash import dcc, html
 
-from config import ACCOUNT, UI, HUD_VERSION
+from config import ACCOUNT, HUD_UI_LANG, UI, HUD_VERSION
 from layouts.quadrant_d import build_fusion_chart
 
 _tier = "kompakt"
 _chart_default = False
+_default_lang = HUD_UI_LANG
+_lang_btn_class = "lang-btn active-en" if _default_lang == "EN" else "lang-btn active-cz"
 
 
 def build_app_layout() -> html.Div:
@@ -27,6 +29,7 @@ def build_app_layout() -> html.Div:
             dcc.Store(id="chart-visible", data=_chart_default),
             dcc.Store(id="macro-expand-store", data=False),
             dcc.Store(id="notification-log-store", storage_type="session", data=[]),
+            dcc.Store(id="language-store", data=_default_lang),
             html.Div(id="dummy-browser-notification-output", style={"display": "none"}),
             dcc.Interval(id="refresh-interval", interval=UI.refresh_interval_ms, n_intervals=0),
             html.Header(
@@ -37,6 +40,13 @@ def build_app_layout() -> html.Div:
                         children=[
                             html.Span("QUANTUM", className="brand-main"),
                             html.Span("HUD", className="brand-sub"),
+                            html.Button(
+                                _default_lang,
+                                id="lang-toggle-btn",
+                                className=_lang_btn_class,
+                                n_clicks=0,
+                                title="CZ / EN",
+                            ),
                         ],
                     ),
                     html.Div(

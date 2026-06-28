@@ -113,7 +113,7 @@ def test_scalp_plan_spread_block():
     )
     assert plan.gate_action == "NE"
     assert plan.spread_ok is False
-    assert plan.direction == "NEUTRAL"
+    assert plan.direction == "LONG"
 
 
 def test_scalp_plan_direction_long():
@@ -172,3 +172,31 @@ def test_scalp_plan_dd_budget_trades():
     assert plan.daily_dd_remaining_usd == pytest.approx(daily_limit - used)
     expected_trades = int((daily_limit - used) // 250.0)
     assert plan.trades_until_daily_limit == expected_trades
+
+
+def test_scalp_plan_extreme_velocity_caution():
+    now = datetime(2026, 6, 27, 15, 0, tzinfo=ZoneInfo(RISK.timezone))
+    verdict = Verdict(
+        status=VerdictStatus.CLEAR,
+        messages=[],
+        golden_window_active=True,
+        news_blocked=False,
+        spread_blocked=False,
+    )
+    # Test with extreme velocity (150.0) -> should trigger "Rozjetý vlak" caution and force POČKEJ (wait)
+    plan = build_scalp_plan(
+        _account(),
+        _market(),
+        verdict,
+        _style(),
+        _macro_clear(),
+        _lot(),
+        [],
+        None,
+        True,
+        now,
+        price_velocity=150.0
+    )
+    assert plan.gate_action == "POČKEJ"
+    assert any("Rozjetý vlak" in r for r in plan.reasons)
+

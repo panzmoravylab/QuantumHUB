@@ -77,6 +77,7 @@ class ScalpPlan:
     pdh_distance_pct: float
     pdl_distance_pct: float
     reasons: tuple[str, ...]
+    price_velocity: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -320,6 +321,7 @@ def build_trade_decision(
     signal_lab,
     connected: bool,
     now: datetime | None = None,
+    price_velocity: float = 0.0,
 ) -> TradeDecision:
     """Jediná otázka: otevřít obchod TEĎ? Doplňuje mezery MT5 indikátoru."""
     tz = ZoneInfo(RISK.timezone)
@@ -351,6 +353,8 @@ def build_trade_decision(
     if verdict.status == VerdictStatus.BLOCKED and not blockers:
         blockers.append("Verdict BLOCKED — podmínky pro vstup nejsou splněny")
 
+    if abs(price_velocity) > 120.0:
+        cautions.append("Rozjetý vlak — extrémní rychlost ceny")
     if not is_golden_window(now):
         cautions.append("Mimo Golden Window 14–18h CE(S)T — nižší likvidita")
     if market and market.atr_impulse:
@@ -408,20 +412,72 @@ def build_trade_decision(
 def _resolve_scalp_direction(
     style_guide: StyleGuide | None,
     gate_action: str,
+    indicators=None,
+    signal_lab=None,
+    trend_brief=None,
 ) -> tuple[str, str]:
-    if not style_guide:
-        return "NEUTRAL", "neutral"
-    if style_guide.style in (TradingStyle.NO_TRADE, TradingStyle.WAIT):
-        return "NEUTRAL", "muted"
-    if gate_action == "NE":
-        return "NEUTRAL", "muted"
+    # Determine the underlying market direction bias based on all displayed info:
+    # 1. MTF trend (from style guide)
+    # 2. SMT Divergence (from indicators)
+    # 3. Signal Lab (regime and direction)
+    # 4. Trend Briefing (daily bias and buy/sell strength)
+    
+    score = 0
+    
+    # 1. MTF Trend Bias
+    if style_guide and style_guide.metrics:
+        mtf_dir = style_guide.metrics.mtf_direction
+        if mtf_dir == "BULL":
+            score += 3
+        elif mtf_dir == "MIXED↑":
+            score += 1
+        elif mtf_dir == "BEAR":
+            score -= 3
+        elif mtf_dir == "MIXED↓":
+            score -= 1
 
-    mtf_dir = style_guide.metrics.mtf_direction
-    if mtf_dir == "BULL":
-        return "LONG", "long"
-    if mtf_dir == "BEAR":
-        return "SHORT", "short"
-    return "NEUTRAL", "neutral"
+    # 2. SMT Divergence
+    if indicators and hasattr(indicators, "dxy_smt_divergence") and indicators.dxy_smt_divergence:
+        if indicators.dxy_smt_divergence == "BULLISH_SMT":
+            score += 2
+        elif indicators.dxy_smt_divergence == "BEARISH_SMT":
+            score -= 2
+
+    # 3. Signal Lab
+    if signal_lab and hasattr(signal_lab, "direction") and signal_lab.direction:
+        if signal_lab.direction == "LONG":
+            score += 2
+        elif signal_lab.direction == "SHORT":
+            score -= 2
+
+    # 4. Trend Briefing Bias
+    if trend_brief:
+        daily_bias = getattr(trend_brief, "daily_bias", None)
+        bias_str = str(daily_bias.value if hasattr(daily_bias, "value") else daily_bias).upper()
+        if "BULL" in bias_str:
+            score += 1
+        elif "BEAR" in bias_str:
+            score -= 1
+        else:
+            buy_pct = getattr(trend_brief, "daily_buy_pct", 50.0) or 50.0
+            sell_pct = getattr(trend_brief, "daily_sell_pct", 50.0) or 50.0
+            if buy_pct > sell_pct:
+                score += 1
+            elif sell_pct > buy_pct:
+                score -= 1
+
+    # Evaluate final direction from the score
+    if score >= 2:
+        direction = "LONG"
+        direction_tone = "long"
+    elif score <= -2:
+        direction = "SHORT"
+        direction_tone = "short"
+    else:
+        direction = "NEUTRAL"
+        direction_tone = "neutral"
+
+    return direction, direction_tone
 
 
 def build_scalp_plan(
@@ -435,6 +491,9 @@ def build_scalp_plan(
     signal_lab,
     connected: bool,
     now: datetime | None = None,
+    indicators=None,
+    trend_brief=None,
+    price_velocity: float = 0.0,
 ) -> ScalpPlan:
     tz = ZoneInfo(RISK.timezone)
     now = now or datetime.now(tz)
@@ -447,6 +506,7 @@ def build_scalp_plan(
         signal_lab,
         connected,
         now,
+        price_velocity=price_velocity,
     )
 
     spread_pts = market.spread_points if market else 0.0
@@ -475,7 +535,9 @@ def build_scalp_plan(
     if risk_usd > 0:
         trades_left = max(0, int(math.floor(daily_remaining_usd / risk_usd)))
 
-    direction, direction_tone = _resolve_scalp_direction(style_guide, decision.action)
+    direction, direction_tone = _resolve_scalp_direction(
+        style_guide, decision.action, indicators, signal_lab, trend_brief
+    )
 
     if style_guide and style_guide.primary_action:
         scalp_hint = style_guide.primary_action
@@ -527,6 +589,7 @@ def build_scalp_plan(
         pdh_distance_pct=pdh_dist,
         pdl_distance_pct=pdl_dist,
         reasons=decision.reasons[:2],
+        price_velocity=price_velocity,
     )
 
 

@@ -47,13 +47,13 @@ def _plan(gate: str, direction: str = "NEUTRAL", reasons: tuple[str, ...] = ()) 
 def test_resolve_buy_on_ano_long():
     state, tone = resolve_decision_state(_plan("ANO", "LONG"))
     assert state == "BUY"
-    assert tone == "long"
+    assert tone == "bull"
 
 
 def test_resolve_sell_on_ano_short():
     state, tone = resolve_decision_state(_plan("ANO", "SHORT"))
     assert state == "SELL"
-    assert tone == "short"
+    assert tone == "bear"
 
 
 def test_resolve_wait_on_pockej():

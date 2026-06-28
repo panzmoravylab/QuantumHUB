@@ -122,9 +122,13 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
-HUD_VERSION = "0.14.0"
+HUD_VERSION = "0.15.0"
 
 HUD_MODE = (os.getenv("HUD_MODE") or "live").strip().lower()
+
+HUD_UI_LANG = (os.getenv("HUD_UI_LANG") or "CZ").strip().upper()
+if HUD_UI_LANG not in ("CZ", "EN"):
+    HUD_UI_LANG = "CZ"
 
 
 def _env_bool(name: str, default: bool) -> bool:

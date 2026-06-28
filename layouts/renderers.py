@@ -22,8 +22,13 @@ from news_scraper import format_t_minus
 from risk_engine import VerdictStatus, LotSizeResult, SessionInfo, Verdict, golden_window_progress, session_progress_pct
 from journal_stats import SessionStats
 from status_rail import StatusChip
-from position_manager import PositionVerdict, summarize_position_verdicts
+from position_manager import PositionVerdict
 from signal_lab import SignalLabSnapshot, synthesize_m1_verdict
+
+from i18n import action_label as i18n_action_label
+from i18n import t as i18n_t
+from i18n import translate_reason as i18n_translate_reason
+
 
 
 VERDICT_LABEL_CZ = {
@@ -32,6 +37,10 @@ VERDICT_LABEL_CZ = {
     "BLOCKED": "BLOK",
     "CRITICAL": "KRITICKÉ",
 }
+
+
+def translate_msg(msg: str, lang: str) -> str:
+    return i18n_translate_reason(msg, lang)
 
 
 def _drawdown_gauge_figure(account: AccountSnapshot | None, trailing: bool = False) -> go.Figure:
@@ -223,57 +232,90 @@ def _r_bar_pct(r: float | None) -> float:
     return round((clamped + 1.0) / 3.0 * 100, 1)
 
 
-def _calculate_trend_health(v: PositionVerdict) -> tuple[float, str, str]:
-    if v.action == "CLOSE":
-        score = 25.0
-    elif v.action == "WATCH":
-        score = 50.0
-    elif v.action == "PROTECT":
-        score = 65.0
-    else:  # HOLD
-        score = 85.0
-
-    r = v.r_current if v.r_current is not None else 0.0
-    if r > 1.0:
-        score += 15.0
-    elif r > 0.0:
-        score += 5.0
-    elif r < -0.5:
-        score -= 15.0
-
-    reasons_str = " ".join(v.reasons).lower()
-    if "proti směru" in reasons_str or "contra" in reasons_str or "proti" in reasons_str:
-        score -= 20.0
-    if "giveback" in reasons_str or "vratil profit" in reasons_str:
-        score -= 15.0
-    if "blízko stopu" in reasons_str or "téměř u stop" in reasons_str:
-        score -= 25.0
-
-    for m in v.metrics:
-        if m.label == "SL vzdálenost" and m.status.value == "warn":
-            score -= 10.0
-        if m.label == "MTF M5/M15" and m.status.value == "warn":
-            score -= 15.0
-
-    score = max(5.0, min(95.0, score))
-
-    if score >= 75.0:
-        return score, "SILNÝ TREND", "ok"
-    elif score >= 50.0:
-        return score, "STABILNÍ / KOREKCE", "warn"
-    else:
-        return score, "SLÁBNE / RIZIKO OBRATU", "err"
+def _trend_health_tone(pct: int) -> str:
+    if pct >= 75:
+        return "ok"
+    if pct >= 50:
+        return "warn"
+    return "err"
 
 
-def render_positions_summary(verdicts: list[PositionVerdict]) -> str:
-    return summarize_position_verdicts(verdicts)
+def _translate_trend_label(label: str, lang: str) -> str:
+    if lang != "EN":
+        return label
+    lbl_map = {
+        "ULTRA SILNÝ TREND": "ULTRA STRONG TREND",
+        "SILNÝ TREND": "STRONG TREND",
+        "KOREKCE / SLEDUJ": "CORRECTION / WATCH",
+        "KOREKCE — SLABÁ PODPORA": "CORRECTION — WEAK SUPPORT",
+        "TRH PROTI POZICI": "MARKET AGAINST POSITION",
+        "SLABÝ TREND": "WEAK TREND",
+        "PROTI SMĚRU": "MARKET AGAINST POSITION",
+        "STABILNÍ / KOREKCE": "STABLE / CORRECTION",
+        "SLÁBNE / RIZIKO OBRATU": "WEAKENING / REVERSAL RISK",
+    }
+    return lbl_map.get(label, label)
+
+
+def _normalize_position_side(side: str, position: PositionInfo | None = None) -> str:
+    raw = (side or "").upper().strip()
+    if raw in ("BUY", "LONG"):
+        return "BUY"
+    if raw in ("SELL", "SHORT"):
+        return "SELL"
+    if position is not None:
+        import MetaTrader5 as mt5
+
+        return "BUY" if position.type == mt5.ORDER_TYPE_BUY else "SELL"
+    return raw
+
+
+def _trend_bar_caption(side: str, pct: int, lang: str) -> str:
+    """Trend support text only — side is shown separately in the position header."""
+    del side
+    if lang == "EN":
+        if pct >= 85:
+            return "Trend supports your position — hold with confidence"
+        if pct >= 70:
+            return "Strong trend support"
+        if pct >= 50:
+            return "Pullback / correction — watch the chart"
+        if pct >= 30:
+            return "Correction — weak support, stay alert"
+        return "Market against your position — reversal risk"
+    if pct >= 85:
+        return "Trend ve směru pozice — klidně drž"
+    if pct >= 70:
+        return "Silná podpora trendu"
+    if pct >= 50:
+        return "Korekce — sleduj graf pozorně"
+    if pct >= 30:
+        return "Korekce — slabá podpora, buď ve střehu"
+    return "Trh jde proti pozici — riziko obratu"
+
+
+def render_positions_summary(verdicts: list[PositionVerdict], lang: str = "CZ") -> str:
+    if not verdicts:
+        return "0 pozic" if lang != "EN" else "0 positions"
+    counts: dict[str, int] = {}
+    for v in verdicts:
+        counts[v.action] = counts.get(v.action, 0) + 1
+    parts = []
+    for action in ("ZAVŘÍT", "CHRÁNIT", "KOREKCE", "DRŽET"):
+        if counts.get(action):
+            parts.append(f"{counts[action]}× {i18n_action_label(action, lang)}")
+    return " · ".join(parts)
 
 
 def render_position_list(
     verdicts: list[PositionVerdict],
+    lang: str = "CZ",
 ) -> html.Div:
     if not verdicts:
-        return html.Div("Žádné otevřené pozice", className="position-list-empty")
+        return html.Div(
+            "No active positions" if lang == "EN" else "Žádné otevřené pozice",
+            className="position-list-empty"
+        )
 
     total_lots = sum(v.volume for v in verdicts)
     total_pnl = sum(v.profit for v in verdicts)
@@ -284,6 +326,15 @@ def render_position_list(
             sl_diff = abs(p.price_open - p.sl)
             total_risk_usd += sl_diff * 100.0 * p.volume
 
+    label_exposure = "EXPOSURE: " if lang == "EN" else "EXPOZICE: "
+    label_lots_suffix = "Lots" if lang == "EN" else "Lotů"
+    label_positions_suffix = "positions" if lang == "EN" else "pozic"
+    label_sl_risk = "SL RISK: " if lang == "EN" else "SL RIZIKO: "
+    label_no_sl = "NO SL!" if lang == "EN" else "BEZ SL!"
+    label_current_pnl = "CURRENT P/L: " if lang == "EN" else "AKTUÁLNÍ P/L: "
+    label_sl_guard = "AUTO SL GUARD: " if lang == "EN" else "AUTO SL GUARD: "
+    label_active = "ACTIVE" if lang == "EN" else "AKTIVNÍ"
+
     exposure_card = html.Div(
         className="exposure-monitor-card",
         children=[
@@ -291,13 +342,13 @@ def render_position_list(
                 className="em-row",
                 children=[
                     html.Div([
-                        html.Span("EXPOZICE: ", className="em-label"),
-                        html.Span(f"{total_lots:.2f} Lotů ({len(verdicts)} pozic)", className="em-val-lots")
+                        html.Span(label_exposure, className="em-label"),
+                        html.Span(f"{total_lots:.2f} {label_lots_suffix} ({len(verdicts)} {label_positions_suffix})", className="em-val-lots")
                     ]),
                     html.Div([
-                        html.Span("SL RIZIKO: ", className="em-label"),
+                        html.Span(label_sl_risk, className="em-label"),
                         html.Span(
-                            f"-${total_risk_usd:,.2f}" if total_risk_usd > 0 else "BEZ SL!", 
+                            f"-${total_risk_usd:,.2f}" if total_risk_usd > 0 else label_no_sl, 
                             className=f"em-val-risk {'tone-red' if total_risk_usd > 0 or total_lots > 0 else ''}"
                         )
                     ])
@@ -307,12 +358,12 @@ def render_position_list(
                 className="em-row em-sub",
                 children=[
                     html.Div([
-                        html.Span("AKTUÁLNÍ P/L: ", className="em-label"),
+                        html.Span(label_current_pnl, className="em-label"),
                         html.Span(f"${total_pnl:+.2f}", className=f"em-val-pnl {'tone-green' if total_pnl >= 0 else 'tone-red'}")
                     ]),
                     html.Div([
-                        html.Span("AUTO SL GUARD: ", className="em-label"),
-                        html.Span("AKTIVNÍ", className="em-val-guard tone-green")
+                        html.Span(label_sl_guard, className="em-label"),
+                        html.Span(label_active, className="em-val-guard tone-green")
                     ])
                 ]
             )
@@ -320,25 +371,52 @@ def render_position_list(
     )
 
     rows = [exposure_card]
+    action_en_map = {
+        "DRŽET": "HOLD",
+        "KOREKCE": "CORRECTION",
+        "CHRÁNIT": "PROTECT",
+        "ZAVŘÍT": "CLOSE",
+    }
     for v in verdicts:
         r_txt = f"{v.r_current:+.2f}R" if v.r_current is not None else "—R"
         row_cls = f"position-row tone-{v.tone} is-expanded"
+        act_disp = action_en_map.get(v.action, v.action) if lang == "EN" else v.action
+        side_u = _normalize_position_side(v.side, v.position)
+        trend_arrow = "▲" if side_u == "BUY" else "▼" if side_u == "SELL" else "◆"
+        trend_chip = html.Span(
+            f"{trend_arrow} {v.trend_alignment_pct}%",
+            className=f"pv-trend-chip tone-{_trend_health_tone(v.trend_alignment_pct)}",
+        )
 
         metric_cells = []
         for m in v.metrics:
+            m_label = m.label
+            m_meaning = m.meaning
+            if lang == "EN":
+                # Translate metric labels/meanings
+                label_trans = {
+                    "SL vzdálenost": "SL Distance",
+                    "MTF M5/M15": "MTF M5/M15",
+                    "Ziskový polštář": "Profit Cushion",
+                    "Skluz při plnění": "Fill Slippage",
+                }
+                m_label = label_trans.get(m_label, m_label)
+                m_meaning = m_meaning.replace("v normálu", "normal").replace("bodů", "pts").replace("chybí SL!", "missing SL!").replace("zajištěno", "secured")
             metric_cells.append(
                 html.Div(
                     className=f"pv-metric status-{m.status.value}",
                     children=[
-                        html.Span(m.label, className="pv-metric-label"),
-                        html.Span(m.meaning, className="pv-metric-val"),
+                        html.Span(m_label, className="pv-metric-label"),
+                        html.Span(m_meaning, className="pv-metric-val"),
                     ],
                 )
             )
-        reason_chips = [html.Span(r, className="pv-reason-chip") for r in v.reasons[:4]]
+        reason_chips = [html.Span(translate_msg(r, lang), className="pv-reason-chip") for r in v.reasons[:4]]
 
         def make_r_bar(extra_class=""):
-            health_pct, health_lbl, health_tone = _calculate_trend_health(v)
+            health_pct = float(v.trend_alignment_pct)
+            health_lbl = _translate_trend_label(v.trend_alignment_label, lang)
+            health_tone = _trend_health_tone(v.trend_alignment_pct)
             return html.Div(
                 className=f"pv-health-loadbar-wrap {extra_class}",
                 children=[
@@ -353,25 +431,20 @@ def render_position_list(
                 ],
             )
         
-        # Helper to render action load bar based on verdict action (Czech action strings)
-        def make_action_bar(action: str, tone: str) -> html.Div:
-            # Map Czech action labels to fill percentage
-            # 100% = full HOLD confidence, 0% = immediate CLOSE signal
-            action_map = {
-                "DRŽET":   (100, "DRŽET — bezpečná zóna"),
-                "KOREKCE": (65,  "KOREKCE — sleduj"),
-                "CHRÁNIT": (30,  "CHRÁNIT — vysoké riziko"),
-                "ZAVŘÍT":  (0,   "ZAVŘÍT — exit!"),
-            }
-            pct, label_text = action_map.get(action, (0, action))
+        def make_action_bar(action: str, tone: str, lang: str = "CZ") -> html.Div:
+            del action
+            pct = v.trend_alignment_pct
+            health_tone = _trend_health_tone(pct)
+            label_text = _trend_bar_caption(v.side, pct, lang)
+            
             return html.Div(
                 className=f"pv-action-bar-outer tone-{tone}",
                 children=[
                     html.Div(
-                        className=f"pv-action-bar-track",
+                        className="pv-action-bar-track",
                         children=[
                             html.Div(
-                                className="pv-action-bar-fill",
+                                className=f"pv-action-bar-fill tone-{health_tone}",
                                 style={"width": f"{pct}%"},
                             ),
                             html.Div(
@@ -389,7 +462,7 @@ def render_position_list(
         detail = html.Div(
             className="position-row-detail",
             children=[
-                html.Div(v.headline, className="pv-headline"),
+                html.Div(translate_msg(v.headline, lang), className="pv-headline"),
                 html.Div(className="pv-reasons", children=reason_chips),
                 html.Div(className="pv-metrics", children=metric_cells),
                 make_r_bar(),
@@ -403,11 +476,12 @@ def render_position_list(
                     html.Div(
                         className="position-row-header",
                         children=[
-                            html.Span(v.action, className=f"pv-badge tone-{v.tone}"),
+                            html.Span(act_disp if lang == "EN" else v.action, className=f"pv-badge tone-{v.tone}"),
                             html.Span(v.side, className="pv-side"),
                             html.Span(f"{v.volume:.2f}", className="pv-lots"),
                             html.Span(f"${v.profit:+.0f}", className="pv-pnl"),
                             html.Span(r_txt, className="pv-r"),
+                            trend_chip,
                             html.Span(f"#{v.ticket}", className="pv-ticket"),
                         ],
                     ),
@@ -441,27 +515,36 @@ def render_header_status_pills(
     verdict: Verdict | None,
     plan: ScalpPlan | None,
     connected: bool,
+    lang: str = "CZ",
 ) -> html.Div:
     pills: list[html.Span] = []
 
     if connected and account and account.connected:
-        pills.append(html.Span("MT5 OK", className="header-pill tone-ok", title="MT5 připojeno"))
+        pills.append(html.Span(i18n_t("mt5_ok", lang), className="header-pill tone-ok", title="MT5"))
     else:
-        pills.append(html.Span("MT5 OFF", className="header-pill tone-err", title="MT5 offline"))
+        pills.append(html.Span(i18n_t("mt5_off", lang), className="header-pill tone-err", title="MT5"))
 
-
+    if market:
+        spr_tone = "warn" if market.spread_warning else "ok"
+        pills.append(
+            html.Span(
+                f"{'↑' if market.spread_warning else ''}{market.spread_points:.0f}p",
+                className=f"header-pill tone-{spr_tone}",
+                title="Spread",
+            )
+        )
 
     if macro_summary:
         if macro_summary.status == MacroStatus.BLOCKED:
-            macro_txt, macro_tone = "MACRO BLOK", "err"
+            macro_txt, macro_tone = i18n_t("macro_block", lang), "err"
         elif macro_summary.status == MacroStatus.CAUTION:
-            macro_txt, macro_tone = "MACRO POZOR", "warn"
+            macro_txt, macro_tone = i18n_t("macro_warn", lang), "warn"
         else:
-            macro_txt, macro_tone = "MACRO OK", "ok"
+            macro_txt, macro_tone = i18n_t("macro_ok", lang), "ok"
         pills.append(html.Span(macro_txt, className=f"header-pill tone-{macro_tone}", title=macro_summary.headline or ""))
 
     if verdict:
-        gw_txt = "GW" if verdict.golden_window_active else "MIMO GW"
+        gw_txt = i18n_t("gw", lang) if verdict.golden_window_active else i18n_t("off_gw", lang)
         gw_tone = "ok" if verdict.golden_window_active else "warn"
         pills.append(html.Span(gw_txt, className=f"header-pill tone-{gw_tone}", title="Golden Window"))
 
@@ -528,19 +611,118 @@ def render_dd_headroom(account: AccountSnapshot | None, plan: ScalpPlan | None) 
     )
 
 
+def _effective_market_bias(
+    plan: ScalpPlan | None,
+    lab: SignalLabSnapshot | None,
+    indicators: IndicatorBundle | None,
+) -> tuple[str, str, bool]:
+    """Unified LONG/SHORT/NEUTRAL bias for RADAR visuals."""
+    m1 = synthesize_m1_verdict(lab)
+    if m1.direction in ("LONG", "SHORT"):
+        direction = m1.direction
+    elif plan and plan.direction in ("LONG", "SHORT"):
+        direction = plan.direction
+    elif indicators and indicators.mtf_bias:
+        bulls = sum(1 for b in indicators.mtf_bias.values() if b == TrendBias.BULL)
+        bears = sum(1 for b in indicators.mtf_bias.values() if b == TrendBias.BEAR)
+        if bulls > bears:
+            direction = "LONG"
+        elif bears > bulls:
+            direction = "SHORT"
+        else:
+            direction = "NEUTRAL"
+    else:
+        direction = "NEUTRAL"
+
+    if direction == "LONG":
+        tone = "bull"
+    elif direction == "SHORT":
+        tone = "bear"
+    elif plan and plan.gate_action == "NE":
+        tone = "muted"
+    else:
+        tone = "wait"
+
+    is_gated = bool(
+        plan
+        and plan.gate_action in ("POČKEJ", "NE")
+        and direction in ("LONG", "SHORT")
+    )
+    return direction, tone, is_gated
+
+
+def _resolve_radar_display(
+    plan: ScalpPlan | None,
+    lab: SignalLabSnapshot | None,
+    indicators: IndicatorBundle | None,
+) -> tuple[str, str, str, bool]:
+    """Return state label, base tone, ring CSS class, is_gated."""
+    if not plan:
+        return "HOLD", "muted", "muted", False
+
+    direction, tone, is_gated = _effective_market_bias(plan, lab, indicators)
+    if direction == "LONG":
+        state = "BUY"
+    elif direction == "SHORT":
+        state = "SELL"
+    elif plan.gate_action == "NE":
+        state = "HOLD"
+        tone = "muted"
+    else:
+        state = "WAIT"
+        if tone not in ("bull", "bear"):
+            tone = "wait"
+
+    ring_class = f"{tone}-gated" if is_gated else tone
+    return state, tone, ring_class, is_gated
+
+
 def resolve_decision_state(plan: ScalpPlan | None) -> tuple[str, str]:
     """Map scalp plan to BUY / SELL / WAIT / HOLD visual state."""
-    if not plan:
-        return "HOLD", "muted"
-    if plan.gate_action == "POČKEJ":
-        return "WAIT", "wait"
-    if plan.gate_action == "NE":
-        return "HOLD", "muted"
-    if plan.direction == "LONG":
-        return "BUY", "long"
-    if plan.direction == "SHORT":
-        return "SELL", "short"
-    return "WAIT", "wait"
+    state, tone, _, _ = _resolve_radar_display(plan, None, None)
+    return state, tone
+
+
+def _compute_liquidity_balance(
+    market: MarketSnapshot | None,
+    indicators: IndicatorBundle | None,
+    struct_text: str,
+    bias_direction: str,
+) -> float:
+    balance_val = 0.0
+    if market:
+        for dist in (market.dist_asian_low, market.dist_london_low):
+            if dist is not None and dist != 999.0:
+                pts = int(dist / 0.01)
+                if pts < 0:
+                    balance_val += 35.0
+                elif pts <= 150:
+                    balance_val += 20.0
+        for dist in (market.dist_asian_high, market.dist_london_high):
+            if dist is not None and dist != 999.0:
+                pts = int(dist / 0.01)
+                if pts < 0:
+                    balance_val -= 35.0
+                elif pts <= 150:
+                    balance_val -= 20.0
+
+    if indicators and indicators.dxy_smt_divergence:
+        if indicators.dxy_smt_divergence == "BULLISH_SMT":
+            balance_val += 30.0
+        elif indicators.dxy_smt_divergence == "BEARISH_SMT":
+            balance_val -= 30.0
+
+    if struct_text.startswith("NEAR PDH"):
+        balance_val -= 20.0
+    elif struct_text.startswith("NEAR PDL"):
+        balance_val += 20.0
+
+    if bias_direction == "LONG":
+        balance_val += 15.0
+    elif bias_direction == "SHORT":
+        balance_val -= 15.0
+
+    return max(-100.0, min(100.0, balance_val))
 
 
 def _strength_delta_short(delta: int) -> str:
@@ -557,15 +739,21 @@ def render_trade_decision_hero(
     verdict: Verdict | None,
     trend_brief: TrendBrief | None,
     indicators: IndicatorBundle | None,
+    lang: str = "CZ",
+    signal_lab: SignalLabSnapshot | None = None,
 ) -> html.Div:
+    del market, verdict, trend_brief
     if not plan:
         return html.Div("—", className="decision-hero empty")
 
-    state, state_tone = resolve_decision_state(plan)
+    state, _state_tone, ring_class, is_gated = _resolve_radar_display(plan, signal_lab, indicators)
     cls = f"decision-hero tone-{plan.gate_tone}"
 
-    gate_reason = plan.reasons[0] if plan.reasons else "Všechny podmínky splněny"
-    
+    gate_reason = plan.reasons[0] if plan.reasons else i18n_t("all_conditions_met", lang)
+    gate_reason = translate_msg(gate_reason, lang)
+
+    label_radar_status = i18n_t("radar_status", lang)
+
     if state == "BUY":
         arrow_icon = "▲"
         sub_label = "BULLISH BIAS"
@@ -574,33 +762,118 @@ def render_trade_decision_hero(
         sub_label = "BEARISH BIAS"
     else:
         arrow_icon = "◆"
-        sub_label = "HOLD / NEUTRÁLNÍ"
+        sub_label = "HOLD / NEUTRAL" if lang == "EN" else "HOLD / NEUTRÁLNÍ"
+
+    gate_badge = None
+    if is_gated:
+        gate_txt = i18n_t("gate_wait", lang)
+        gate_badge = html.Span(gate_txt, className="dh-gate-wait-badge")
+
+    ring_children = [
+        html.Div(arrow_icon, className="dh-hud-arrow"),
+        html.Div(state, className="dh-hud-state"),
+        html.Div(sub_label, className="dh-hud-sub"),
+    ]
+    if gate_badge:
+        ring_children.append(gate_badge)
 
     return html.Div(
         className=cls,
         children=[
             html.Div(
-                className=f"dh-hud-ring tone-{state_tone}",
-                children=[
-                    html.Div(arrow_icon, className="dh-hud-arrow"),
-                    html.Div(state, className="dh-hud-state"),
-                    html.Div(sub_label, className="dh-hud-sub"),
-                ]
+                className=f"dh-hud-ring tone-{ring_class}",
+                children=ring_children,
             ),
             html.Div(
                 className="dh-telemetry",
                 children=[
                     html.Div([
-                        html.Span("STATUS RADARU: ", className="tel-label"),
-                        html.Span(gate_reason, className=f"tel-value tone-{state_tone} dh-gate-reason")
+                        html.Span(label_radar_status, className="tel-label"),
+                        html.Span(gate_reason, className=f"tel-value tone-{plan.gate_tone} dh-gate-reason")
                     ], className="tel-row"),
                 ]
+            ),
+            render_momentum_meter(plan, lang=lang)
+        ]
+    )
+
+
+def render_momentum_meter(plan: ScalpPlan | None, lang: str = "CZ") -> html.Div:
+    if not plan:
+        return html.Div(className="mom-meter-wrap empty")
+        
+    vel_pts = plan.price_velocity
+    abs_vel = abs(vel_pts)
+    
+    if lang == "EN":
+        title_label = "PRICE VELOCITY M1 (3-5s):"
+        if abs_vel <= 15.0:
+            status_lbl = "M1 Speed: CRAWL (flat)"
+            mom_class = "tone-crawl"
+        elif abs_vel <= 50.0:
+            status_lbl = "M1 Speed: NORMAL"
+            mom_class = "tone-normal-up" if vel_pts >= 0 else "tone-normal-down"
+        elif abs_vel <= 120.0:
+            status_lbl = "M1 Speed: FAST MOVEMENT"
+            mom_class = "tone-fast"
+        else:
+            status_lbl = "⚠ RUNNING TRAIN — DO NOT ENTER!"
+            mom_class = "tone-extreme"
+    else:
+        title_label = "MOMENTUM M1 (3-5s):"
+        if abs_vel <= 15.0:
+            status_lbl = "M1 Rychlost: KLID (cena stojí)"
+            mom_class = "tone-crawl"
+        elif abs_vel <= 50.0:
+            status_lbl = "M1 Rychlost: NORMÁLNÍ"
+            mom_class = "tone-normal-up" if vel_pts >= 0 else "tone-normal-down"
+        elif abs_vel <= 120.0:
+            status_lbl = "M1 Rychlost: RYCHLÝ POHYB"
+            mom_class = "tone-fast"
+        else:
+            status_lbl = "⚠ ROZJETÝ VLAK — NEVSTUPOVAT!"
+            mom_class = "tone-extreme"
+
+    # Scale max 150 points for visual bar
+    pct_width = min(50.0, (abs_vel / 150.0) * 50.0)
+    if vel_pts >= 0:
+        fill_left = 50.0
+    else:
+        fill_left = 50.0 - pct_width
+
+    return html.Div(
+        className="mom-meter-wrap",
+        children=[
+            html.Div(
+                className="mom-meter-labels",
+                children=[
+                    html.Span(title_label, className="mom-label"),
+                    html.Span(f"{vel_pts:+.0f} p", className=f"mom-val {mom_class}"),
+                ]
+            ),
+            html.Div(
+                className="mom-meter-track",
+                children=[
+                    html.Div(className="mom-meter-center"),
+                    html.Div(
+                        className=f"mom-meter-fill {mom_class}",
+                        style={
+                            "left": f"{fill_left}%",
+                            "width": f"{pct_width}%",
+                        }
+                    )
+                ]
+            ),
+            html.Div(
+                className=f"mom-meter-status {mom_class}",
+                children=status_lbl
             )
         ]
     )
 
 
-def render_style_strip(guide: StyleGuide | None) -> html.Div:
+def render_style_strip(guide: StyleGuide | None, lang: str = "CZ") -> html.Div:
+    del lang
     if not guide:
         return html.Div(className="style-strip empty")
     tone_map = {
@@ -635,7 +908,9 @@ def render_recommendation(
     plan: ScalpPlan | None,
     verdict: Verdict | None,
     indicators: IndicatorBundle | None,
+    lang: str = "CZ",
 ) -> html.Div:
+    del lang
     if not plan:
         return html.Div("Advisor čeká na data…", className="advisor-empty")
 
@@ -786,7 +1061,8 @@ def render_active_warnings(
     return html.Div(className="warnings-inner", children=banners[:2])
 
 
-def render_mtf_strip(indicators: IndicatorBundle | None) -> html.Div:
+def render_mtf_strip(indicators: IndicatorBundle | None, lang: str = "CZ") -> html.Div:
+    del lang
     icons = {"BULL": "▲", "BEAR": "▼", "NEUTRAL": "◆"}
     mtf = indicators.mtf_bias if indicators else {}
     pills = []
@@ -829,9 +1105,10 @@ def trend_sparkline_bars(values: tuple[int, ...]) -> html.Div:
     )
 
 
-def render_trend_brief_panel(brief: TrendBrief | None) -> html.Div:
+def render_trend_brief_panel(brief: TrendBrief | None, lang: str = "CZ") -> html.Div:
     if not brief:
-        return html.Div("Čekám na data pro trend briefing…", className="trend-brief-empty")
+        empty = "Waiting for trend briefing data…" if lang == "EN" else "Čekám na data pro trend briefing…"
+        return html.Div(empty, className="trend-brief-empty")
 
     delta_txt, delta_tone = _strength_delta_label(brief.strength_delta)
     bar_tooltip = (
@@ -949,8 +1226,9 @@ def render_metrics(
     market: MarketSnapshot | None,
     indicators: IndicatorBundle | None,
     lot_result: LotSizeResult | None,
+    lang: str = "CZ",
 ) -> html.Div:
-    del lot_result
+    del lot_result, lang
     spread_cost = "—"
     spread_tone = "neutral"
     if market and market.atr > 0:
@@ -1050,6 +1328,7 @@ def render_timeline(sessions: list[SessionInfo]) -> html.Div:
 def render_next_event_compact(
     enriched: list[EnrichedNewsEvent],
     plan: ScalpPlan | None,
+    lang: str = "CZ",
 ) -> html.Div:
     """Next high-impact macro event — countdown for the session column."""
     future = sorted(
@@ -1063,7 +1342,7 @@ def render_next_event_compact(
         return html.Div(
             className=f"session-next-event tone-{tone}",
             children=[
-                html.Div("Další událost", className="sne-label"),
+                html.Div(i18n_t("next_event", lang), className="sne-label"),
                 html.Div(
                     className="sne-row",
                     children=[
@@ -1082,7 +1361,7 @@ def render_next_event_compact(
         return html.Div(
             className="session-next-event tone-normal",
             children=[
-                html.Div("Další událost", className="sne-label"),
+                html.Div(i18n_t("next_event", lang), className="sne-label"),
                 html.Div(plan.next_news_label, className="sne-title"),
                 html.Div(f"T-{plan.next_news_minutes} min", className="sne-meta"),
             ],
@@ -1091,8 +1370,8 @@ def render_next_event_compact(
     return html.Div(
         className="session-next-event tone-clear",
         children=[
-            html.Div("Macro", className="sne-label"),
-            html.Div("Bez high-impact v nejbližších hodinách", className="sne-title"),
+            html.Div(i18n_t("macro_label", lang), className="sne-label"),
+            html.Div(i18n_t("no_macro", lang), className="sne-title"),
         ],
     )
 
@@ -1119,6 +1398,7 @@ def render_risk_reminder(
     account: AccountSnapshot | None,
     plan: ScalpPlan | None,
     verdict: Verdict | None,
+    lang: str = "CZ",
 ) -> html.Div:
     del account, verdict
     rows = []
@@ -1127,7 +1407,7 @@ def render_risk_reminder(
             html.Div(
                 className="risk-row",
                 children=[
-                    html.Span("DD headroom", className="risk-label"),
+                    html.Span(i18n_t("dd_headroom", lang), className="risk-label"),
                     html.Span(f"${plan.daily_dd_remaining_usd:,.0f}", className="risk-value"),
                 ],
             )
@@ -1137,7 +1417,7 @@ def render_risk_reminder(
             html.Div(
                 className="risk-row",
                 children=[
-                    html.Span("Obchody zbývá", className="risk-label"),
+                    html.Span(i18n_t("trades_left", lang), className="risk-label"),
                     html.Span(str(plan.trades_until_daily_limit), className="risk-value"),
                 ],
             )
@@ -1147,7 +1427,7 @@ def render_risk_reminder(
     return html.Div(
         className="session-risk-reminder",
         children=[
-            html.Div("Risk & limity", className="srr-head"),
+            html.Div(i18n_t("risk_limits", lang), className="srr-head"),
             html.Div(className="srr-rows", children=rows),
         ],
     )
@@ -1286,22 +1566,51 @@ def render_macro_status(summary: MacroDaySummary, source: str = "", error: str |
 
 def render_macro_summary(
     summary: MacroDaySummary,
+    events: list[Any] | None = None,
+    now: datetime | None = None,
     market: MarketSnapshot | None = None,
     source: str = "",
     error: str | None = None,
+    lang: str = "CZ",
 ) -> html.Div:
+    from zoneinfo import ZoneInfo
     tone = summary.status.value.lower() # clear, caution, blocked
     
     # LED class based on tone
     led_class = f"macro-status-led tone-{tone}"
     
-    # Map tone to Czech status text
-    status_label_map = {
-        "clear": "BEZPEČNÁ ZÓNA (Bez významných zpráv)",
-        "caution": "ZVÝŠENÉ RIZIKO (Pozor na makro)",
-        "blocked": "ZÁKAZ OBCHODOVÁNÍ (Makro zprávy)",
-    }
-    status_label = status_label_map.get(tone, "Neznámý stav")
+    if lang == "EN":
+        status_label_map = {
+            "clear": "SAFE ZONE (No major news)",
+            "caution": "ELEVATED RISK (Watch macro)",
+            "blocked": "NO TRADING (Macro news)",
+        }
+        unknown_status = "Unknown status"
+    else:
+        status_label_map = {
+            "clear": "BEZPEČNÁ ZÓNA (Bez významných zpráv)",
+            "caution": "ZVÝŠENÉ RIZIKO (Pozor na makro)",
+            "blocked": "ZÁKAZ OBCHODOVÁNÍ (Makro zprávy)",
+        }
+        unknown_status = "Neznámý stav"
+    status_label = status_label_map.get(tone, unknown_status)
+
+    # Check if a high impact macro news event is coming up within 5 mins
+    upcoming_critical = False
+    if events and now:
+        tz = ZoneInfo(RISK.timezone)
+        for e in events:
+            if hasattr(e, "impact") and e.impact.lower() in ("high", "red") and getattr(e, "event_time", None):
+                e_local = e.event_time.astimezone(tz)
+                delta_sec = (e_local - now.astimezone(tz)).total_seconds()
+                mins_until = delta_sec / 60.0
+                if -5.0 <= mins_until <= 5.0:
+                    upcoming_critical = True
+                    break
+
+    inner_class = f"macro-summary-inner tone-{tone}"
+    if upcoming_critical:
+        inner_class += " macro-pulse-alert"
 
     if error and source == "CHYBA":
         headline = error[:90]
@@ -1312,8 +1621,9 @@ def render_macro_summary(
     
     window = ""
     if summary.caution_from and summary.caution_until:
+        window_prefix = "Caution" if lang == "EN" else "Opatrnost"
         window = (
-            f"Opatrnost {summary.caution_from.strftime('%H:%M')}–"
+            f"{window_prefix} {summary.caution_from.strftime('%H:%M')}–"
             f"{summary.caution_until.strftime('%H:%M')}"
         )
 
@@ -1331,30 +1641,48 @@ def render_macro_summary(
     if market:
         reaction_text = ""
         reaction_tone = "neutral"
-        if market.atr_impulse and market.spread_warning:
-            reaction_text = "POTVRZENO: Silná volatilita + vysoký spread"
-            reaction_tone = "err"
-        elif market.atr_impulse:
-            reaction_text = "POTVRZENO: Vysoká volatilita (ATR impulz)"
-            reaction_tone = "warn"
-        elif market.spread_warning:
-            reaction_text = "VAROVÁNÍ: Vysoký spread"
-            reaction_tone = "warn"
+        if lang == "EN":
+            if market.atr_impulse and market.spread_warning:
+                reaction_text = "CONFIRMED: High volatility + wide spread"
+                reaction_tone = "err"
+            elif market.atr_impulse:
+                reaction_text = "CONFIRMED: High volatility (ATR impulse)"
+                reaction_tone = "warn"
+            elif market.spread_warning:
+                reaction_text = "WARNING: Wide spread"
+                reaction_tone = "warn"
+            elif summary.status in (MacroStatus.BLOCKED, MacroStatus.CAUTION):
+                reaction_text = "News phase: Calm market (volatility normal)"
+                reaction_tone = "ok"
+            else:
+                reaction_text = "Impact: No reaction"
+                reaction_tone = "ok"
+            market_prefix = "Market"
         else:
-            if summary.status == MacroStatus.BLOCKED or summary.status == MacroStatus.CAUTION:
+            if market.atr_impulse and market.spread_warning:
+                reaction_text = "POTVRZENO: Silná volatilita + vysoký spread"
+                reaction_tone = "err"
+            elif market.atr_impulse:
+                reaction_text = "POTVRZENO: Vysoká volatilita (ATR impulz)"
+                reaction_tone = "warn"
+            elif market.spread_warning:
+                reaction_text = "VAROVÁNÍ: Vysoký spread"
+                reaction_tone = "warn"
+            elif summary.status in (MacroStatus.BLOCKED, MacroStatus.CAUTION):
                 reaction_text = "Fáze zpráv: Klidný trh (volatilita v normálu)"
                 reaction_tone = "ok"
             else:
                 reaction_text = "Dopad: Bez reakce"
                 reaction_tone = "ok"
-        
+            market_prefix = "Trh"
+
         meta_children.append(html.Div(
-            f"Trh: {reaction_text}",
+            f"{market_prefix}: {reaction_text}",
             className=f"macro-reaction status-{reaction_tone} tier-kompakt-only"
         ))
 
     return html.Div(
-        className=f"macro-summary-inner tone-{tone}",
+        className=inner_class,
         children=[
             html.Div(
                 className="macro-status-header",
@@ -1377,7 +1705,8 @@ _CHECK_ICON = {
 }
 
 
-def render_pre_news_checklist(checklist: PreNewsChecklist) -> html.Div:
+def render_pre_news_checklist(checklist: PreNewsChecklist, lang: str = "CZ") -> html.Div:
+    del lang
     tone = "idle"
     if checklist.active:
         tone = "ready" if checklist.ready else "alert"
@@ -1422,7 +1751,8 @@ _CATEGORY_LABEL = {
 }
 
 
-def render_engine_panel(panel: EnginePanel) -> html.Div:
+def render_engine_panel(panel: EnginePanel, lang: str = "CZ") -> html.Div:
+    del lang
     pills = []
     for p in panel.pills:
         pills.append(
@@ -1473,28 +1803,43 @@ def render_signal_lab_compact(
     lab: SignalLabSnapshot | None,
     market: MarketSnapshot | None = None,
     indicators: IndicatorBundle | None = None,
+    plan: ScalpPlan | None = None,
+    lang: str = "CZ",
 ) -> html.Div:
     if not lab or not lab.signals:
-        return html.Div("M1 Analytics čeká na data…", className="signal-lab-empty")
+        empty = i18n_t("m1_waiting", lang)
+        return html.Div(empty, className="signal-lab-empty")
 
     verdict = synthesize_m1_verdict(lab)
-    
-    action_text = "ČEKEJ / NEUTRÁLNÍ"
-    action_desc = "Trh nemá jasný směr. Vyčkej na impuls."
-    action_tone = "wait"
-    
-    if verdict.direction == "LONG":
-        action_text = "HLEDEJ BUY (LONG bias)"
-        action_desc = "M1/M5 momentum podporuje růst. Vyhledávej long pullbacky."
-        action_tone = "bull"
-    elif verdict.direction == "SHORT":
-        action_text = "HLEDEJ SELL (SHORT bias)"
-        action_desc = "M1/M5 momentum podporuje pokles. Vyhledávej short pullbacky."
-        action_tone = "bear"
+    bias_dir, action_tone, _is_gated = _effective_market_bias(plan, lab, indicators)
+
+    if lang == "EN":
+        action_map = {
+            "LONG": ("LOOK FOR BUY (LONG bias)", "M1/M5 momentum supports upside. Hunt long pullbacks."),
+            "SHORT": ("LOOK FOR SELL (SHORT bias)", "M1/M5 momentum supports downside. Hunt short pullbacks."),
+        }
+        wait_txt = ("WAIT / NEUTRAL", "No clear direction. Wait for impulse.")
+        sweep_txt = ("STAY OUT (SWEEP / REVERSAL)", "Liquidity sweep or extreme move detected. Higher risk.")
+    else:
+        action_map = {
+            "LONG": ("HLEDEJ BUY (LONG bias)", "M1/M5 momentum podporuje růst. Vyhledávej long pullbacky."),
+            "SHORT": ("HLEDEJ SELL (SHORT bias)", "M1/M5 momentum podporuje pokles. Vyhledávej short pullbacky."),
+        }
+        wait_txt = ("ČEKEJ / NEUTRÁLNÍ", "Trh nemá jasný směr. Vyčkej na impuls.")
+        sweep_txt = ("STÁT MIMO TRH (SWEEP / OBRAZ)", "Detekován sweep likvidity nebo extrémní pohyb. Vyšší riziko.")
+
+    if bias_dir in action_map:
+        action_text, action_desc = action_map[bias_dir]
+        if bias_dir == "LONG":
+            action_tone = "bull"
+        else:
+            action_tone = "bear"
     elif lab.regime in ("SWEEP", "EXTENDED"):
-        action_text = "STÁT MIMO TRH (SWEEP / OBRAZ)"
-        action_desc = "Detekován sweep likvidity nebo extrémní pohyb. Vyšší riziko."
+        action_text, action_desc = sweep_txt
         action_tone = "err"
+    else:
+        action_text, action_desc = wait_txt
+        action_tone = "wait"
 
     indicators_list = []
     
@@ -1609,7 +1954,7 @@ def render_signal_lab_compact(
     ))
 
     # Radar balance calculations
-    balance_val = 0.0
+    balance_val = _compute_liquidity_balance(market, indicators, struct_text, bias_dir)
     
     radar_items = []
     if market:
@@ -1649,41 +1994,8 @@ def render_signal_lab_compact(
             sweep_pill("Londýn High", market.dist_london_high),
             sweep_pill("Londýn Low", market.dist_london_low),
         ]
-        
-        # Calculate balance based on sweeps and proximity
-        # Check Lows (positive bias towards BUY)
-        for dist in (market.dist_asian_low, market.dist_london_low):
-            if dist is not None and dist != 999.0:
-                pts = int(dist / 0.01)
-                if pts < 0:
-                    balance_val += 35.0
-                elif pts <= 150:
-                    balance_val += 20.0
-                    
-        # Check Highs (negative bias towards SELL)
-        for dist in (market.dist_asian_high, market.dist_london_high):
-            if dist is not None and dist != 999.0:
-                pts = int(dist / 0.01)
-                if pts < 0:
-                    balance_val -= 35.0
-                elif pts <= 150:
-                    balance_val -= 20.0
 
-    # Add SMT divergence bias to radar balance
-    if indicators and indicators.dxy_smt_divergence:
-        if indicators.dxy_smt_divergence == "BULLISH_SMT":
-            balance_val += 30.0
-        elif indicators.dxy_smt_divergence == "BEARISH_SMT":
-            balance_val -= 30.0
-
-    # Add structure direction bias to radar balance
-    if struct_text.startswith("NEAR PDH"):
-        balance_val -= 20.0
-    elif struct_text.startswith("NEAR PDL"):
-        balance_val += 20.0
-
-    # Clamp balance value to [-100, 100]
-    balance_val = max(-100.0, min(100.0, balance_val))
+    # Clamp balance value to [-100, 100] (already clamped in helper)
     
     # Radar balance bar styling
     fill_left = 50.0
@@ -1692,12 +2004,12 @@ def render_signal_lab_compact(
     balance_class = "neutral"
     
     if balance_val > 0:
-        fill_width = balance_val * 0.5
+        fill_width = max(balance_val * 0.5, 4.0)
         fill_left = 50.0
         fill_color = "var(--cyan)"
         balance_class = "buy"
     elif balance_val < 0:
-        fill_width = abs(balance_val) * 0.5
+        fill_width = max(abs(balance_val) * 0.5, 4.0)
         fill_left = 50.0 - fill_width
         fill_color = "var(--red)"
         balance_class = "sell"
@@ -1724,9 +2036,9 @@ def render_signal_lab_compact(
                     html.Div(
                         className="radar-balance-labels",
                         children=[
-                            html.Span("SELL LIKVIDITA", className="lbl-sell"),
+                            html.Span(i18n_t("sell_liq", lang), className="lbl-sell"),
                             html.Span(f"{'+' if balance_val > 0 else ''}{balance_val:.0f}%", className="lbl-val"),
-                            html.Span("BUY LIKVIDITA", className="lbl-buy"),
+                            html.Span(i18n_t("buy_liq", lang), className="lbl-buy"),
                         ]
                     )
                 ]
@@ -1736,7 +2048,7 @@ def render_signal_lab_compact(
     radar_panel = html.Div(
         className="session-radar-panel",
         children=[
-            html.Div("Likviditní Radar (Session H/L)", className="sr-title"),
+            html.Div(i18n_t("radar_title", lang), className="sr-title"),
             html.Div(className="sr-grid", children=radar_items),
             balance_bar
         ]
@@ -2107,13 +2419,11 @@ def render_scalp_efficiency(indicators: IndicatorBundle | None) -> html.Div:
     )
 
 
-def render_kompakt_notifications(log_entries: list[dict] | None) -> html.Div:
+def render_kompakt_notifications(log_entries: list[dict] | None, lang: str = "CZ") -> html.Div:
     """Render log items inside the kompakt Notification Center."""
     if not log_entries:
-        return html.Div(
-            "Žádná nová varování.",
-            className="notifications-log-empty"
-        )
+        empty = "No new warnings." if lang == "EN" else "Žádná nová varování."
+        return html.Div(empty, className="notifications-log-empty")
 
     items = []
     # Show last 20 notifications, newest on top

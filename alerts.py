@@ -123,6 +123,7 @@ def send_discord_webhook(message: str) -> None:
 
     url = DISCORD_WEBHOOK_URL
     if not url:
+        logger.info(f"Discord Webhook URL not set. Alert message: {message}")
         return
 
     def run():
@@ -131,6 +132,8 @@ def send_discord_webhook(message: str) -> None:
             res = requests.post(url, json=payload, timeout=5)
             if res.status_code >= 400:
                 logger.error(f"Discord Webhook returned status {res.status_code}: {res.text}")
+            else:
+                logger.info(f"Discord Webhook sent successfully: {message}")
         except Exception as exc:
             logger.error(f"Failed to send Discord Webhook alert: {exc}")
 

@@ -16,6 +16,7 @@ from position_tracker import PositionTrackState
 from risk_engine import Verdict, VerdictStatus
 from signal_lab import SignalLabSnapshot, synthesize_m1_verdict
 from trading_style import StyleGuide, TradingStyle
+from trend_brief import TrendBrief
 from user_insights import CheckItem, CheckStatus
 
 ACTION_CLOSE = "ZAVŘÍT"
@@ -46,6 +47,8 @@ class PositionVerdict:
     metrics: tuple[CheckItem, ...]
     confidence: int
     position: PositionInfo
+    trend_alignment_pct: int = 50
+    trend_alignment_label: str = "STABILNÍ / KOREKCE"
 
 
 def _mtf_direction(indicators: IndicatorBundle | None, tfs: tuple[str, ...] = ("M5", "M15")) -> str:
@@ -140,6 +143,140 @@ def _build_metrics(
     return tuple(items[:5])
 
 
+def _calc_trend_alignment(
+    side: str,
+    aligned: bool,
+    m1_direction: str,
+    trend_brief: TrendBrief | None,
+    r: float | None,
+    track: PositionTrackState | None,
+    action: str,
+    market: MarketSnapshot | None = None,
+    indicators: IndicatorBundle | None = None,
+    signal_lab: SignalLabSnapshot | None = None,
+    style_guide: StyleGuide | None = None,
+    macro_summary: MacroDaySummary | None = None,
+) -> tuple[int, str]:
+    """0–100 % how strongly the market supports holding this position direction."""
+    is_buy = side == "BUY"
+    is_sell = side == "SELL"
+    score = 0.0
+
+    if indicators and indicators.mtf_bias:
+        mtf = indicators.mtf_bias
+        tf_points = 0.0
+        for tf in ("M1", "M5", "M15", "H1"):
+            bias = mtf.get(tf, TrendBias.NEUTRAL)
+            if is_buy:
+                if bias == TrendBias.BULL:
+                    tf_points += 6.25
+                elif bias == TrendBias.BEAR:
+                    tf_points -= 4.0
+                else:
+                    tf_points += 1.5
+            elif is_sell:
+                if bias == TrendBias.BEAR:
+                    tf_points += 6.25
+                elif bias == TrendBias.BULL:
+                    tf_points -= 4.0
+                else:
+                    tf_points += 1.5
+        score += max(0.0, min(25.0, tf_points))
+    elif aligned:
+        score += 18.0
+    else:
+        score += 4.0
+
+    if is_buy and m1_direction == "LONG":
+        score += 20.0
+    elif is_sell and m1_direction == "SHORT":
+        score += 20.0
+    elif m1_direction in ("LONG", "SHORT"):
+        score -= 22.0
+    else:
+        score += 6.0
+
+    if trend_brief:
+        score += (trend_brief.strength_now / 10.0) * 16.0
+        if trend_brief.strength_delta > 0:
+            score += 4.0
+        elif trend_brief.strength_delta < 0:
+            score -= 8.0
+        if is_buy and trend_brief.now_direction == "BUY":
+            score += 4.0
+        elif is_sell and trend_brief.now_direction == "SELL":
+            score += 4.0
+        elif trend_brief.now_direction in ("BUY", "SELL"):
+            score -= 6.0
+
+    if signal_lab:
+        regime = (signal_lab.regime or "").upper()
+        if regime in ("SWEEP", "EXTENDED"):
+            score -= 18.0
+        elif regime == "CHOP":
+            score -= 14.0
+        elif regime == "TREND":
+            score += 10.0
+
+    if style_guide:
+        if style_guide.style == TradingStyle.MOMENTUM_TREND:
+            score += 8.0
+        elif style_guide.style == TradingStyle.RANGE_SCALP:
+            score += 2.0
+        elif style_guide.style in (TradingStyle.WAIT, TradingStyle.NO_TRADE):
+            score -= 14.0
+
+    if market and market.atr > 0:
+        candle_ratio = market.current_candle_range / market.atr
+        if candle_ratio >= 0.85:
+            score += 6.0
+        elif candle_ratio >= 0.55:
+            score += 3.0
+        if market.atr_impulse:
+            score += 4.0
+        if market.spread_warning:
+            score -= 10.0
+
+    if r is not None:
+        if r >= 1.0:
+            score += 8.0
+        elif r >= 0.35:
+            score += 4.0
+        elif r < -0.35:
+            score -= 12.0
+        if r < -0.75:
+            score -= 10.0
+
+    if track and track.mfe_r >= 0.8 and r is not None and r <= max(0.35, track.mfe_r * 0.45):
+        score -= 16.0
+
+    if macro_summary:
+        if macro_summary.status == MacroStatus.BLOCKED:
+            score -= 25.0
+        elif macro_summary.status == MacroStatus.CAUTION:
+            score -= 8.0
+
+    if action == ACTION_CLOSE:
+        score = min(score, 25.0)
+    elif action == ACTION_PROTECT:
+        score = min(score, 45.0)
+    elif action == ACTION_WATCH:
+        score = min(score, 58.0)
+
+    pct = int(round(max(5.0, min(98.0, score))))
+    if pct >= 85:
+        label = "ULTRA SILNÝ TREND"
+    elif pct >= 70:
+        label = "SILNÝ TREND"
+    elif pct >= 50:
+        label = "KOREKCE / SLEDUJ"
+    elif pct >= 30:
+        label = "KOREKCE — SLABÁ PODPORA"
+    else:
+        label = "TRH PROTI POZICI"
+    return pct, label
+
+
 def _evaluate_single(
     pos: PositionInfo,
     track: PositionTrackState | None,
@@ -150,6 +287,7 @@ def _evaluate_single(
     verdict: Verdict | None,
     macro_summary: MacroDaySummary | None,
     now: datetime,
+    trend_brief: TrendBrief | None = None,
 ) -> PositionVerdict:
     side = pos.side or ("BUY" if pos.type == mt5.ORDER_TYPE_BUY else "SELL")
     r = pos.r_current
@@ -222,6 +360,20 @@ def _evaluate_single(
     confidence = min(100, scores[0][0] + (20 if action == ACTION_CLOSE else 10 if action == ACTION_PROTECT else 0))
 
     metrics = _build_metrics(pos, track, mtf_dir, aligned, macro_summary, market)
+    trend_pct, trend_label = _calc_trend_alignment(
+        side,
+        aligned,
+        m1.direction,
+        trend_brief,
+        r,
+        track,
+        action,
+        market,
+        indicators,
+        signal_lab,
+        style_guide,
+        macro_summary,
+    )
 
     return PositionVerdict(
         ticket=pos.ticket,
@@ -236,6 +388,8 @@ def _evaluate_single(
         metrics=metrics,
         confidence=confidence,
         position=pos,
+        trend_alignment_pct=trend_pct,
+        trend_alignment_label=trend_label,
     )
 
 
@@ -249,6 +403,7 @@ def evaluate_positions(
     verdict: Verdict | None,
     macro_summary: MacroDaySummary | None,
     now: datetime | None = None,
+    trend_brief: TrendBrief | None = None,
 ) -> list[PositionVerdict]:
     tz = ZoneInfo(RISK.timezone)
     now = now or datetime.now(tz)
@@ -264,6 +419,7 @@ def evaluate_positions(
             verdict,
             macro_summary,
             now,
+            trend_brief,
         )
         for pos in positions
     ]

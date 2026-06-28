@@ -128,6 +128,30 @@ class SharedState:
     kill_switch_message: str = ""
     signal_lab: SignalLabSnapshot | None = None
     indicators: IndicatorBundle | None = None
+    bid_history: list[tuple[float, float]] = field(default_factory=list)
+    current_velocity: float = 0.0
+
+    def _record_market_price(self, bid: float) -> None:
+        now = time.time()
+        self.bid_history.append((now, bid))
+        cutoff = now - 20.0
+        self.bid_history = [(t, b) for t, b in self.bid_history if t >= cutoff]
+        
+        if len(self.bid_history) < 2:
+            self.current_velocity = 0.0
+            return
+            
+        # Target timestamp is 4 seconds ago
+        target_ts = now - 4.0
+        # Find closest history item
+        closest = min(self.bid_history, key=lambda entry: abs(entry[0] - target_ts))
+        time_diff = now - closest[0]
+        
+        if time_diff >= 1.0:
+            price_diff = bid - closest[1]
+            self.current_velocity = price_diff / 0.01
+        else:
+            self.current_velocity = 0.0
     compute_log: ComputeLog = field(default_factory=ComputeLog)
     _known_tickets: set[int] = field(default_factory=set)
     trend_strength_history: list[tuple[float, int]] = field(default_factory=list)
@@ -164,6 +188,7 @@ class SharedState:
                 self.account = account
             if market is not None:
                 self.market = market
+                self._record_market_price(market.bid)
             if positions is not None:
                 self.positions = positions
             if alerts is not None:
@@ -186,6 +211,7 @@ class SharedState:
                 "indicators": self.indicators,
                 "position_tracks": dict(self.position_tracks),
                 "compute_log": self.compute_log.read(),
+                "price_velocity": self.current_velocity,
             }
 
 
