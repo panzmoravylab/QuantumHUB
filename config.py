@@ -122,7 +122,28 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
-HUD_VERSION = "0.15.0"
+HUD_VERSION = "0.16.0"
+
+
+def _env_layout(name: str = "HUD_LAYOUT", default: str = "main") -> str:
+    raw = (os.getenv(name) or default).strip().lower()
+    if raw in ("portrait", "vertical", "portrait1080", "p"):
+        return "portrait"
+    return "main"
+
+
+HUD_LAYOUT = _env_layout()
+
+
+def normalize_hud_layout(mode: str | None = None) -> str:
+    raw = (mode or HUD_LAYOUT or "main").strip().lower()
+    if raw in ("portrait", "vertical", "portrait1080", "p"):
+        return "portrait"
+    return "main"
+
+
+def toggle_hud_layout(mode: str | None = None) -> str:
+    return "portrait" if normalize_hud_layout(mode) == "main" else "main"
 
 HUD_MODE = (os.getenv("HUD_MODE") or "live").strip().lower()
 

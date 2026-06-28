@@ -4,21 +4,27 @@ from __future__ import annotations
 
 from dash import dcc, html
 
-from config import ACCOUNT, HUD_UI_LANG, UI, HUD_VERSION
+from config import ACCOUNT, HUD_LAYOUT, HUD_UI_LANG, UI, HUD_VERSION
+from i18n import layout_button_label, t as i18n_t
 from layouts.quadrant_d import build_fusion_chart
 
 _tier = "kompakt"
+_layout = HUD_LAYOUT
 _chart_default = False
 _default_lang = HUD_UI_LANG
 _lang_btn_class = "lang-btn active-en" if _default_lang == "EN" else "lang-btn active-cz"
+_layout_btn_class = f"layout-btn layout-{_layout}"
+_layout_btn_label = layout_button_label(_layout, _default_lang)
+_layout_btn_title = i18n_t("layout_toggle_title", _default_lang)
 
 
 def build_app_layout() -> html.Div:
     return html.Div(
         id="hud-root",
         className="hud-root",
-        **{"data-tier": _tier},
+        **{"data-tier": _tier, "data-layout": _layout},
         children=[
+            dcc.Store(id="layout-mode-store", storage_type="local", data=_layout),
             dcc.Store(id="active-tf", data="M1"),
             dcc.Store(id="kill-switch-store", data=""),
             dcc.Store(id="kill-arm-store", data={}),
@@ -46,6 +52,13 @@ def build_app_layout() -> html.Div:
                                 className=_lang_btn_class,
                                 n_clicks=0,
                                 title="CZ / EN",
+                            ),
+                            html.Button(
+                                _layout_btn_label,
+                                id="layout-toggle-btn",
+                                className=_layout_btn_class,
+                                n_clicks=0,
+                                title=_layout_btn_title,
                             ),
                         ],
                     ),

@@ -36,6 +36,12 @@ STRINGS: dict[str, dict[str, str]] = {
     "panel_macro": {"CZ": "Macro kalendář", "EN": "Macro calendar"},
     "kill_switch": {"CZ": "KILL SWITCH", "EN": "KILL SWITCH"},
     "all_conditions_met": {"CZ": "Všechny podmínky splněny", "EN": "All conditions met"},
+    "layout_main": {"CZ": "HLAVNÍ", "EN": "MAIN"},
+    "layout_portrait": {"CZ": "PORTRAIT", "EN": "PORTRAIT"},
+    "layout_toggle_title": {
+        "CZ": "Přepnout zobrazení: HLAVNÍ (široký monitor) / PORTRAIT (monitor na výšku 1080×1920)",
+        "EN": "Switch layout: MAIN (wide monitor) / PORTRAIT (vertical 1080×1920)",
+    },
 }
 
 ACTION_LABELS: dict[str, dict[str, str]] = {
@@ -77,6 +83,18 @@ def t(key: str, lang: str = "CZ", **kwargs) -> str:
 def action_label(action: str, lang: str = "CZ") -> str:
     lang = "EN" if lang == "EN" else "CZ"
     return ACTION_LABELS.get(action, {}).get(lang, action)
+
+
+def layout_button_label(mode: str, lang: str = "CZ") -> str:
+    key = "layout_portrait" if normalize_layout_mode(mode) == "portrait" else "layout_main"
+    return t(key, lang)
+
+
+def normalize_layout_mode(mode: str | None) -> str:
+    raw = (mode or "main").strip().lower()
+    if raw in ("portrait", "vertical", "portrait1080", "p"):
+        return "portrait"
+    return "main"
 
 
 def translate_reason(msg: str, lang: str = "CZ") -> str:

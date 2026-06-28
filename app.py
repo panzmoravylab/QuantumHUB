@@ -14,8 +14,8 @@ from zoneinfo import ZoneInfo
 from dash import ALL, Dash, Input, Output, State, callback, clientside_callback, ClientsideFunction, ctx, html, no_update
 
 from alerts import alert_on_new_critical
-from config import HUD_MODE, HUD_UI_LANG, RISK, SAFETY, UI, HUD_VERSION
-from i18n import t as i18n_t
+from config import HUD_MODE, HUD_UI_LANG, RISK, SAFETY, UI, HUD_VERSION, normalize_hud_layout, toggle_hud_layout
+from i18n import layout_button_label, t as i18n_t
 from journal_stats import compute_session_stats
 from toast_manager import active_toasts, build_toast_candidates, merge_extra_toasts, sync_toast_queue
 from position_manager import close_toast_candidates, evaluate_positions
@@ -293,6 +293,33 @@ def switch_hud_tier(_k, _p, _d, current):
         return "tier-btn active" if tier == name else "tier-btn"
 
     return tier, tier, btn_cls("kompakt"), btn_cls("prep"), btn_cls("detail")
+
+
+@callback(
+    Output("layout-mode-store", "data"),
+    Input("layout-toggle-btn", "n_clicks"),
+    State("layout-mode-store", "data"),
+    prevent_initial_call=True,
+)
+def toggle_layout_mode(_n_clicks, current):
+    return toggle_hud_layout(current)
+
+
+@callback(
+    Output("hud-root", "data-layout"),
+    Output("layout-toggle-btn", "children"),
+    Output("layout-toggle-btn", "className"),
+    Output("layout-toggle-btn", "title"),
+    Input("layout-mode-store", "data"),
+    Input("language-store", "data"),
+)
+def sync_layout_ui(mode, lang):
+    layout = normalize_hud_layout(mode)
+    lang = lang or HUD_UI_LANG
+    label = layout_button_label(layout, lang)
+    cls = f"layout-btn layout-{layout}"
+    title = i18n_t("layout_toggle_title", lang)
+    return layout, label, cls, title
 
 
 @callback(

@@ -6,12 +6,12 @@
 
 Prop rules · Macro gate · Liquidity RADAR · Per-position trend alignment %
 
-[![Version](https://img.shields.io/badge/version-0.15.0-cyan?style=for-the-badge)](config.py)
+[![Version](https://img.shields.io/badge/version-0.16.0-cyan?style=for-the-badge)](config.py)
 [![Python](https://img.shields.io/badge/python-3.11+-blue?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
 [![Platform](https://img.shields.io/badge/platform-Windows-0078D6?style=for-the-badge&logo=windows&logoColor=white)]()
-[![Tests](https://img.shields.io/badge/tests-48%20passing-brightgreen?style=for-the-badge)]()
+[![Tests](https://img.shields.io/badge/tests-53%20passing-brightgreen?style=for-the-badge)]()
 
-[Quick start](#-quick-start) · [Features](#-features) · [TEST mode](#-test-mode-no-mt5) · [Trend % guide](#-position-trend--how-to-read-it) · [Česky](#-česky)
+[Quick start](#-quick-start) · [Display modes](#-display-modes-main--portrait) · [Features](#-features) · [Trend % guide](#-position-trend--how-to-read-it) · [Česky](#-česky)
 
 </div>
 
@@ -28,6 +28,37 @@ Prop rules · Macro gate · Liquidity RADAR · Per-position trend alignment %
 <p align="center">
   <sub>Decision RADAR · open positions with trend % · macro caution · notification center</sub>
 </p>
+
+### Portrait mode — vertical monitor (1080×1920)
+
+<p align="center">
+  <img src="docs/screenshots/hud-portrait-test.png" alt="Quantum HUD — PORTRAIT layout for vertical monitor" width="420"/>
+</p>
+
+<p align="center">
+  <sub>Single-column stack: RADAR → positions → notifications · toggle in header</sub>
+</p>
+
+---
+
+## 🖥 Display modes (MAIN / PORTRAIT)
+
+| Mode | Best for | Layout |
+|------|----------|--------|
+| **MAIN** | Wide monitor (~1780px) | 3 columns — Account · Decision/RADAR · Notifications |
+| **PORTRAIT** | 22" vertical **1080×1920** | Single scroll column — **Účet + pozice** first, **M1 Analytics**, then RADAR/macro (no Engine log, no Notifications) |
+
+**Switch anytime:** header button **HLAVNÍ / PORTRAIT** (next to CZ/EN). Choice is saved in browser (`localStorage`).
+
+**Launch shortcuts:**
+
+| File | Effect |
+|------|--------|
+| `Spustit_Quantum_HUD.bat` | Ask MAIN or PORTRAIT at start |
+| `Spustit_Quantum_HUD_PORTRAIT.bat` | Live mode, default PORTRAIT |
+| `Spustit_Quantum_HUD_TEST_PORTRAIT.bat` | TEST replay, default PORTRAIT |
+
+Env: `HUD_LAYOUT=main` or `HUD_LAYOUT=portrait`
 
 ---
 
@@ -130,6 +161,7 @@ To capture your own snapshot while MT5 is live → **`Ulozit_test_data.bat`**
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `HUD_UI_LANG` | `CZ` | UI language (`CZ` or `EN`) |
+| `HUD_LAYOUT` | `main` | Display layout (`main` or `portrait`) |
 | `HUD_MODE` | `live` | Set to `test` for replay |
 | `TEST_M1_BAR_SECONDS` | `30` | Real seconds per M1 bar in TEST |
 | `TEST_SNAPSHOT` | `test_data/default_snapshot.json` | Replay data file |
@@ -151,7 +183,7 @@ See `.env.example` and `.env.test.example` for the full list.
 └───────────────┴────────────────────────────┴─────────────────────┘
 ```
 
-After updates, hard-refresh the browser (`Ctrl+Shift+R`) or open `?build=0.15.0`.
+After updates, hard-refresh the browser (`Ctrl+Shift+R`) or open `?build=0.16.0`.
 
 ---
 
@@ -166,7 +198,7 @@ pip install -r requirements.txt
 python -m pytest tests/ -q
 ```
 
-Current version: **v0.15.0** — see `config.py` → `HUD_VERSION`.
+Current version: **v0.16.0** — see `config.py` → `HUD_VERSION`.
 
 ---
 
@@ -188,7 +220,9 @@ This software is for **informational and educational purposes** only. It is not 
 |--------|------|
 | `Nastaveni.bat` | První konfigurace `.env` |
 | `Spustit_Quantum_HUD.bat` | Live režim s MT5 |
+| `Spustit_Quantum_HUD_PORTRAIT.bat` | Live režim — výchozí PORTRAIT |
 | `Spustit_Quantum_HUD_TEST.bat` | Replay bez MT5 |
+| Přepínač **HLAVNÍ / PORTRAIT** | V hlavičce u loga QUANTUM HUD |
 | Přepínač **CZ / EN** | V hlavičce u loga QUANTUM HUD |
 
 ---

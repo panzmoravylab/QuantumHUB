@@ -26,6 +26,15 @@ if errorlevel 2 (
     title Quantum HUD - TEST REZIM
 )
 
+echo.
+if "!HUD_LANG!"=="EN" (
+    echo  Display: [M] MAIN wide  [P] PORTRAIT vertical 1080x1920
+) else (
+    echo  Zobrazeni: [M] HLAVNI siroky  [P] PORTRAIT monitor na vysku 1080x1920
+)
+choice /C MP /M "Layout / Zobrazeni"
+if errorlevel 2 (set "HUD_LAYOUT=portrait") else (set "HUD_LAYOUT=main")
+
 if "!HUD_LANG!"=="EN" (
     echo   Replay from test_data\default_snapshot.json
     echo   MetaTrader 5 NOT required.
